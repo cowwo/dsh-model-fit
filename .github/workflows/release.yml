@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # 需要写权限才能创建 GitHub Release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Install deps
+        run: npm ci || pnpm install --no-frozen-lockfile
+
+      # 1. 发布裸名版 dsh-model-fit（让别人用短名装）
+      - name: Publish dsh-model-fit
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 2. 临时把包名改成 @cowwo 的 scoped 版再发一次
+      - name: Publish @cowwo/dsh-model-fit
+        run: |
+          npm pkg set name=@cowwo/dsh-model-fit
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 3. 自动创建 GitHub Release 版本页（写进安装命令）
+      - name: Create GitHub Release
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## 安装
+
+          ```sh
+          dsh plugin --profile web add dsh-model-fit
+          ```
+
+          也可用 scoped 名：`@cowwo/dsh-model-fit`。
+
+          - 为自定义（手动添加）模型设置「图片输入」与「推理强度」
+          - 一键继承目录模型的精确能力（含线上取值与 compat）
+          EOF
+          gh release create ${GITHUB_REF_NAME} --title "${GITHUB_REF_NAME}" --notes-file release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

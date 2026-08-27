@@ -1,0 +1,74 @@
+{
+  "name": "dsh-model-fit",
+  "version": "0.1.7",
+  "description": "模型能力管理：为手写模型设置图片输入与推理强度（可一键继承目录模型的精确能力）。",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./typert": "./lib/typert.host.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "model",
+    "capability",
+    "reasoning",
+    "vision"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cowwo/dsh-model-fit.git"
+  },
+  "homepage": "https://github.com/cowwo/dsh-model-fit#readme",
+  "bugs": {
+    "url": "https://github.com/cowwo/dsh-model-fit/issues"
+  },
+  "author": "cowwo <cowwo@users.noreply.github.com>",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "*",
+    "@earendil-works/pi-ai": "^0.84.3"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-typert-protocol": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  }
+}
