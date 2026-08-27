@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-fit",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "模型能力管理：为手写模型设置图片输入与推理强度（可一键继承目录模型的精确能力）。",
   "type": "module",
   "main": "lib/index.js",
