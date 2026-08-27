@@ -19,17 +19,30 @@ jobs:
       - name: Install deps
         run: npm ci || pnpm install --no-frozen-lockfile
 
-      # 1. 发布裸名版 dsh-model-fit（让别人用短名装）
+      # 1. 发布裸名版 dsh-model-fit（让别人用短名装），带重试兜底瞬时 404/网络抖动
       - name: Publish dsh-model-fit
-        run: npm publish --access public
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i: npm publish dsh-model-fit";
+            if npm publish --access public; then echo 'published'; exit 0; fi
+            echo "Attempt $i failed, retrying in 5s...";
+            sleep 5;
+          done;
+          echo 'All publish attempts failed'; exit 1
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # 2. 临时把包名改成 @cowwo 的 scoped 版再发一次
+      # 2. 临时把包名改成 @cowwo 的 scoped 版再发一次（带重试）
       - name: Publish @cowwo/dsh-model-fit
         run: |
           npm pkg set name=@cowwo/dsh-model-fit
-          npm publish --access public
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i: npm publish @cowwo/dsh-model-fit";
+            if npm publish --access public; then echo 'published'; exit 0; fi
+            echo "Attempt $i failed, retrying in 5s...";
+            sleep 5;
+          done;
+          echo 'All publish attempts failed'; exit 1
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
