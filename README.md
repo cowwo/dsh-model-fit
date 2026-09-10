@@ -3,9 +3,11 @@
 **模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.1.9`
+- 当前版本：`0.1.10`
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
-- 依赖：`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-typert-protocol`、`@earendil-works/pi-ai`（运行时由 DSH 安装目录级联解析）
+- 依赖：
+  - **`zod@^4`（真实 dependency，随插件自动安装）** —— `lib/typert.host.js` 直接 `import { z } from 'zod'`，而 DSH 的 typert 校验要求 schema 必须是 **zod v4**（判据是内部标记 `_zod`）。声明为 dependency 才能保证解析到 v4，详见下方 0.1.10 变更记录。
+  - `@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-typert-protocol`、`@earendil-works/pi-ai`（peer，运行时由 DSH 安装目录级联解析）
 
 ---
 
@@ -156,6 +158,28 @@ dsh plugin --profile web remove dsh-model-fit
 ---
 
 ## 变更记录
+
+### 0.1.10
+
+**修复：别人安装后 `dsh web` 直接起不来（`parameter codec is not backed by a zod v4 schema`）。**
+
+- 根因：`lib/typert.host.js` 里 `import { z } from 'zod'`，但 `package.json` **从未声明过 `zod`**（连 `dependencies` 字段都没有）。于是 zod 从哪来完全靠就近解析碰运气：`dsh plugin --profile web add` 装到对方 profile 后，解析命中 profile 里被其它包 hoist 上来的 **zod v3** → schema 没有 v4 的内部标记 `_zod` → typert-loader 校验失败。
+- 后果特别重：这是 **boot 阶段**的 manifest 校验，失败会让**整个 dsh 起不来**（不是单个插件降级）。报错形如：
+  ```
+  Error: dsh: plugin tree failed to load: failed to apply loader entry typert-loader …
+    - typert-loader: dsh-model-fit invocation "dsh-model-fit#modelCapability/source" parameter codec is not backed by a zod v4 schema
+  ```
+- 排查要点：DSH 的判据在 `dsh-typert-loader/lib/index.js` 的 `requireStrictCodec`：
+  ```js
+  if (typeof schema !== 'object' || schema === null || !('_zod' in schema) || typeof schema.parse !== 'function')
+    throw new Error(`… is not backed by a zod v4 schema`)
+  ```
+  `_zod` 是 **zod v4 独有**的内部标记，zod v3 没有 —— 所以这条报错的唯一含义就是「拿到 v3 了」。
+- 改法：`package.json` 补 `"dependencies": { "zod": "^4.4.3" }`，与 DSH 官方包（`dsh-goal`/`dsh-llm`/`dsh-commands` 等同样手写 `typert.host.js` 的包）以及同作者的 `dsh-provider-info` 一致。
+- 验证方式：在**复刻了对方环境**的临时工程里（顶层 hoist 一个 zod v3），分别安装 `0.1.9` 与 `0.1.10`：
+  - `0.1.9`：manifest 看到的 zod = `3.25.76`，`_zod` = false → **REJECT**（复现同一报错）
+  - `0.1.10`：manifest 看到的 zod = 自带的 `4.x`，`_zod` = true → **ACCEPT**（顶层那个 v3 原封不动仍在）
+- ⚠️ **教训**：写了 `typert.host.js` 就必须把 `zod` 声明成 dependency；且本地开发时若 `node_modules` 里残留一个 zod 软链，会**完全掩盖**这个 bug（本地能跑、别人装了就崩）。验证必须在干净/敌意环境里做。
 
 ### 0.1.9
 
