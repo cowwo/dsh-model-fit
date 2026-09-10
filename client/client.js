@@ -7,6 +7,8 @@ window.__ModuleLoader__.load({
 		let React = require("react");
 
 		//#region 模型能力管理页（原生 UI 风格，仅样式，功能不变）
+		/** 本插件读写的能力设置命名空间。 */
+		const NS = "llm-pi-ai";
 		const MAIN_LEVELS = ["off", "high", "max"];
 		const EXTRA_LEVELS = ["minimal", "low", "medium", "xhigh"];
 		const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -53,8 +55,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function ModelCapabilitiesPage(props) {
-			const api = props.api;
-			const rpc = props.rpc;
+			const bridge = props.bridge;
 			const [providers, setProviders] = React.useState(null);
 			const [catalog, setCatalog] = React.useState([]);
 			const [drafts, setDrafts] = React.useState({});
@@ -72,23 +73,22 @@ window.__ModuleLoader__.load({
 			const load = () => {
 				setBusy(true);
 				Promise.all([
-					api.settings.describe({}),
-					api.llm.providers({}),
-					api.llm.models({})
-				]).then(([describeRes, providersRes, modelsRes]) => {
+					bridge.describe(),
+					bridge.catalog()
+				]).then(([describeRes, catalogRes]) => {
 					let list = [];
-					let rev;
-					if (describeRes && describeRes.result && describeRes.result.ok) {
-						const view = describeRes.result.value;
-						const doc = ((view && view.namespaces) || []).find((n) => n.ns === "llm-pi-ai");
-						rev = (doc && doc.revision) || (view && view.revision);
+					if (describeRes && describeRes.ok) {
+						const view = describeRes.value;
+						const doc = ((view && view.namespaces) || []).find((n) => n.ns === NS);
+						setRevision(doc ? doc.revision : undefined);
 						const raw = (doc && doc.user) || {};
-						list = [];
-						for (const [id, profile] of Object.entries(raw.providers || {})) {
+						for (const [id, profile] of Object.entries((raw && raw.providers) || {})) {
 							if (!profile || !Array.isArray(profile.models)) continue;
 							list.push({ id, displayName: profile.displayName || id, models: profile.models.map(cleanEntry) });
 						}
-						setRevision(rev);
+					} else {
+						const err = describeRes && describeRes.error;
+						setResult({ ok: false, error: "读取设置失败：" + ((err && (err.message || err.code)) || "未知错误") });
 					}
 					setProviders(list);
 					const d = {};
@@ -100,16 +100,12 @@ window.__ModuleLoader__.load({
 					setDrafts(d);
 					setBaseline(b);
 
-					const prows = providersRes && providersRes.result && providersRes.result.ok ? providersRes.result.value.providers || [] : [];
-					const mgroups = modelsRes && modelsRes.result && modelsRes.result.ok ? modelsRes.result.value.groups || [] : [];
-					const byId = {};
-					for (const g of mgroups) byId[g.id] = g;
-					const cats = [];
-					for (const p of prows) {
-						const g = byId[p.provider] || {};
-						cats.push({ provider: p.provider, displayName: p.displayName || p.provider, models: (g.models || []).map((m) => ({ id: m.id, name: m.name || m.id, reasoning: m.reasoning })) });
-					}
-					setCatalog(cats);
+					const groups = catalogRes && catalogRes.ok && catalogRes.value ? catalogRes.value.groups || [] : [];
+					setCatalog(groups.map((g) => ({
+						provider: g.id,
+						displayName: g.name || g.id,
+						models: (g.models || []).map((m) => ({ id: m.id, name: m.name || m.id, reasoning: m.reasoning }))
+					})));
 				}).catch((e) => setResult({ ok: false, error: String(e && e.message || e) })).finally(() => setBusy(false));
 			};
 			React.useEffect(() => { load(); }, []);
@@ -146,7 +142,7 @@ window.__ModuleLoader__.load({
 				upd(pid, index, { input: imgOn(m) ? ["text"] : ["text", "image"] });
 			};
 			const inheritTo = (pid, index, srcProvider, srcModel) => {
-				rpc.call("/api", "modelCapability/source", { args: { request: { provider: srcProvider, model: srcModel } } })
+				bridge.source({ provider: srcProvider, model: srcModel })
 					.then((resp) => {
 						setPicker(null);
 						setSrcQuery("");
@@ -193,16 +189,12 @@ window.__ModuleLoader__.load({
 			const doSave = () => {
 				setBusy(true);
 				const ops = changedPids.map((pid) => ({ op: "set", path: ["providers", pid, "models"], value: drafts[pid] || [] }));
-				api.settings.mutate({
-					ns: "llm-pi-ai",
-					ops,
-					...(revision === undefined ? {} : { expectedRevision: revision })
-				}).then((resp) => {
-					if (resp && resp.result && resp.result.ok) {
+				bridge.mutate(ops, revision).then((resp) => {
+					if (resp && resp.ok) {
 						setResult({ ok: true, error: "已保存。模型选择器与对话请求将使用新的能力配置。" });
 						load();
 					} else {
-						const err = resp && resp.result && resp.result.error;
+						const err = resp && resp.error;
 						setResult({ ok: false, error: (err && (err.message || err.code)) || "保存失败（响应无错误信息）" });
 					}
 				}).catch((e) => {
@@ -338,16 +330,34 @@ window.__ModuleLoader__.load({
 
 		const inject = ["slots", "connection"];
 		function apply(ctx) {
-			ctx.inject(["slots", "connection"], (scoped) => {
+			// `connection` 只提供 rpc；设置读写必须走 `remote.settings`
+			// （旧的 connection.api.settings/llm 早已不存在，直接访问会让
+			//  settings.section 抛错并渲染成空白页）。
+			ctx.inject(["slots", "connection", "remote", "remote.settings"], (scoped) => {
 				const slots = scoped.slots;
-				const api = scoped.connection.api;
 				const rpc = scoped.connection.rpc;
+				const settings = scoped.remote.settings;
+				// 目录（“继承自…”的来源）是可选依赖：拿不到也要能渲染页面。
+				let loadCatalog = null;
+				ctx.inject(["remote", "remote.session"], (extra) => {
+					loadCatalog = () => extra.remote.session.modelCatalog();
+				});
+				const bridge = {
+					describe: () => settings.describe(),
+					mutate: (ops, revision) => revision === undefined
+						? settings.mutate(NS, ops)
+						: settings.mutate(NS, ops, revision),
+					catalog: () => loadCatalog
+						? loadCatalog()
+						: Promise.resolve({ ok: true, value: { groups: [] } }),
+					source: (request) => rpc.call("/api", "modelCapability/source", { args: { request } })
+				};
 				slots.inject("settings.section", () => slots.register({
 					name: "settings.section",
 					id: "model-fit",
 					order: 12,
 					label: "模型能力管理"
-				}, (props) => React.createElement(ModelCapabilitiesPage, { ...props, api, rpc })));
+				}, (props) => React.createElement(ModelCapabilitiesPage, { ...props, bridge })));
 			});
 		}
 		exports.apply = apply;

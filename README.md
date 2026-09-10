@@ -3,7 +3,7 @@
 **模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.1.8`
+- 当前版本：`0.1.9`
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
 - 依赖：`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-typert-protocol`、`@earendil-works/pi-ai`（运行时由 DSH 安装目录级联解析）
 
@@ -72,9 +72,9 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 
 ```
 浏览器端（client/client.js）
-  ├─ connection.api.settings.describe({})   读取 llm-pi-ai 原始配置（含每个供应商的 models）
-  ├─ connection.api.llm.providers / models  读取目录（供“继承”选择来源）
-  ├─ connection.api.settings.mutate({ns, ops, expectedRevision})   跨供应商一次保存
+  ├─ connection.remote.settings.describe()                读取 llm-pi-ai 原始配置（含每个供应商的 models）
+  ├─ connection.remote.session.modelCatalog()              读取目录（供“继承”选择来源）
+  ├─ connection.remote.settings.mutate(ns, ops, revision)  跨供应商一次保存
   └─ connection.rpc.call("/api","modelCapability/source",{args:{request}})
         │
         ▼
@@ -85,8 +85,21 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 ```
 
 - 主机暴露一个 typert 主机端点 `modelCapability/source`（严格 manifest，`lib/typert.host.js`），浏览器端通过网关调用。
-- 保存走的是官方 `api.settings.mutate`（主 realm），避免动态插件沙箱 realm 的序列化问题。
+- 设置读写走官方 **Remote 命名空间** `ctx.remote.settings`（`describe` / `mutate`），与官方「模型」设置页同一条写入路径，因此写入即时生效、无沙箱 realm 序列化问题。
+- 目录来源走官方 `ctx.remote.session.modelCatalog()`（与模型选择器同源），拿不到时该依赖可选降级，页面照常渲染。
 - 写入的数据位于 `llm-pi-ai` 设置命名空间的 `providers.<id>.models`：`input` / `reasoningEfforts` / `compat`，由 pi-ai 适配器在运行时解析生效。
+
+### 依赖的服务（client 端 inject）
+
+| 服务 | 用途 | 必需 |
+| --- | --- | --- |
+| `slots` | 注册 `settings.section` 设置分区 | 是 |
+| `connection` | `connection.rpc` 调用主机 `modelCapability/source` | 是 |
+| `remote` + `remote.settings` | 设置命名空间的读写（`describe` / `mutate`） | 是 |
+| `remote.session` | `modelCatalog()` 提供“继承自…”的目录来源 | 否（缺失则来源列表为空） |
+
+> ⚠️ 注意：`ctx.connection` **不提供** `api`。历史上曾有 `connection.api.settings/llm` 这层封装，0.1.5 起已移除；若继续访问 `connection.api.settings`，`settings.section` 会在渲染时抛
+> `TypeError: Cannot read properties of undefined (reading 'settings')`，被 slot 错误边界吞掉，表现为**整页空白**。这正是 0.1.8 及更早版本的故障点。
 
 ### 目录结构
 
@@ -139,6 +152,23 @@ dsh plugin --profile web remove dsh-model-fit
 - 继承时若目录没有该模型的**精确**条目（如自造的 `*-vision-exp`），会按同族/等级名继承并提示 —— 这是目录数据缺失所致，非插件 bug。
 - 无模型的目录供应商在“继承”弹窗中不显示（无来源可继承）。
 - 对个别需要特定 `compat` 才能跑通的第三方网关，若默认继承后仍请求异常，可在等级 pill 的小输入框手动调整线上值。
+
+---
+
+## 变更记录
+
+### 0.1.9
+
+**修复：设置 → 模型能力管理 整页空白。**
+
+- 根因：client 端仍在访问 `connection.api.settings` / `connection.api.llm`，但 `ctx.connection` 从 0.1.5 起只提供 `rpc`（不提供 `api`）。组件首次渲染即抛
+  `TypeError: Cannot read properties of undefined (reading 'settings')`，被 slot 错误边界（`[data-slot-error="settings.section"]`）吸收，页面只剩空白，且控制台仅有一条 console error。
+- 改法：改用官方 Remote 命名空间 —— `remote.settings.describe/mutate` 读写 `llm-pi-ai`，`remote.session.modelCatalog()` 读取“继承自…”的目录来源（可选依赖，缺失时降级为空列表而非崩溃）。
+- 行为不变：图片开关、推理等级、一键继承、批量操作、跨供应商一次保存、撤销修改均照旧；已验证保存后 `settings.yaml` 真实写入且模型选择器生效。
+
+### 0.1.8
+
+- 模型卡片两行布局、名称不再截断；等级线上取值可编辑；“全部收起/展开”。
 
 ---
 
