@@ -60,6 +60,7 @@ jobs:
 
           - 为自定义（手动添加）模型设置「图片输入」与「推理强度」
           - 一键继承目录模型的精确能力（含线上取值与 compat）
+          - 线路级「系统消息角色」：在 UI 里改 `compat.supportsDeveloperRole`，绕开上游只认 `system` 时的 `developer` 422
           EOF
           gh release create ${GITHUB_REF_NAME} --title "${GITHUB_REF_NAME}" --notes-file release-notes.md
         env:

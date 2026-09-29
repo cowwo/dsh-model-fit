@@ -1,9 +1,9 @@
 # dsh-model-fit
 
-**模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
+**模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」、为每条线路设置「系统消息角色」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.1.10`
+- 当前版本：`0.2.0`
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
 - 依赖：
   - **`zod@^4`（真实 dependency，随插件自动安装）** —— `lib/typert.host.js` 直接 `import { z } from 'zod'`，而 DSH 的 typert 校验要求 schema 必须是 **zod v4**（判据是内部标记 `_zod`）。声明为 dependency 才能保证解析到 v4，详见下方 0.1.10 变更记录。
@@ -68,6 +68,13 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 - 完全复用官方主题变量 `var(--dsw-alias-*)`（卡片、边框、文字、品牌色、状态色），**自动适配浅色/深色主题**。
 - 卡片式布局、pill 徽章、ghost/主按钮，与 DSH「模型」原生设置页同一套视觉语言。
 
+### 9. 线路系统消息角色（`compat.supportsDeveloperRole`）
+- 在模型列表上方按**线路**列出「系统消息角色」下拉：`自动（交给 pi-ai 推断）` / `强制 system` / `强制 developer`。
+- 写入的是 `providers.<id>.compat.supportsDeveloperRole`，即**线路级默认值**；pi-ai 合并顺序是 `模型 compat > 线路 compat > 安装目录条目 > 自身探测`，所以单个模型自己写了同名字段时以模型为准（界面上会提示）。
+- 用途：某些中转/上游只认 `system`，而 DSH 对推理模型默认发 OpenAI 的 `developer` 角色，会间歇性 422（错误形如 `unknown variant 'developer'`）。选「强制 system」就写 `false`，从源头绕开，不必手改 `settings.yaml`。
+- 「自动」= 删除该字段（`compat` 里只剩这一个键时整块删除，不留空的 `compat: {}`），交回 pi-ai 按 baseURL/协议推断。
+- 只收这个字段的协议（`openai-completions` / `openai-responses` / `azure-openai-responses` / `openai-codex-responses`）才可编辑；其它协议的线路（如 `anthropic-messages`）下拉置灰并给出原因 —— 线路级写了协议不认的 compat 字段会被设置层**整条拒绝**，所以这里提前拦掉。
+
 ---
 
 ## 工作原理（架构）
@@ -89,7 +96,8 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 - 主机暴露一个 typert 主机端点 `modelCapability/source`（严格 manifest，`lib/typert.host.js`），浏览器端通过网关调用。
 - 设置读写走官方 **Remote 命名空间** `ctx.remote.settings`（`describe` / `mutate`），与官方「模型」设置页同一条写入路径，因此写入即时生效、无沙箱 realm 序列化问题。
 - 目录来源走官方 `ctx.remote.session.modelCatalog()`（与模型选择器同源），拿不到时该依赖可选降级，页面照常渲染。
-- 写入的数据位于 `llm-pi-ai` 设置命名空间的 `providers.<id>.models`：`input` / `reasoningEfforts` / `compat`，由 pi-ai 适配器在运行时解析生效。
+- 写入的数据位于 `llm-pi-ai` 设置命名空间：**模型级** `providers.<id>.models[]` 的 `input` / `reasoningEfforts` / `compat`，以及**线路级** `providers.<id>.compat.supportsDeveloperRole`（系统消息角色），都由 pi-ai 适配器在运行时解析生效。
+- 所有写入都是 `settings.mutate` 的**路径操作**（`set` 深路径会自动创建中间对象，`unset` 精确删叶子），模型能力与线路角色会合并进**同一次** mutate、共用同一个 `expectedRevision`，因此只改角色时不会顺带重写没变化的模型列表。
 
 ### 依赖的服务（client 端 inject）
 
@@ -154,10 +162,36 @@ dsh plugin --profile web remove dsh-model-fit
 - 继承时若目录没有该模型的**精确**条目（如自造的 `*-vision-exp`），会按同族/等级名继承并提示 —— 这是目录数据缺失所致，非插件 bug。
 - 无模型的目录供应商在“继承”弹窗中不显示（无来源可继承）。
 - 对个别需要特定 `compat` 才能跑通的第三方网关，若默认继承后仍请求异常，可在等级 pill 的小输入框手动调整线上值。
+- 「自动」**不显示 pi-ai 实际推断出的角色**：推断逻辑（`detectCompat`）在 pi-ai 内部且未导出，浏览器端算不出来。经验上自定义线路（baseURL 不含任何已知厂商特征）会被推断为 `developer`，所以想稳妥就显式选「强制 system」。
+- 「继承自…」会**整体覆盖**模型的 `compat`；若来源目录条目的 compat 里带 `supportsDeveloperRole`，它会盖过线路级角色设置。遇到这种情况按线路重设一次，或直接改用线路级开关（模型只要不写该字段就跟随线路）。
 
 ---
 
 ## 变更记录
+
+### 0.2.0
+
+**新增：线路级「系统消息角色」—— 不用再手改 `settings.yaml` 绕开 `developer` 422。**
+
+- 背景：DSH 对声明了 `reasoningEfforts` 的模型，会把系统提示词以 OpenAI 的 `developer` 角色发出（`@earendil-works/pi-ai/dist/api/openai-completions.js` 里 `useDeveloperRole = model.reasoning && compat.supportsDeveloperRole`）。部分中转/上游只认 `system`，会返回 422 `invalid_request_error`（DeepSeek 官方原文：`messages[0].role: unknown variant 'developer'`），而 422 不在 DSH 的自动重试名单里，所以表现为「整轮随机失败」。此前的对策是手写一行：
+  ```yaml
+  providers:
+    cmd-01:
+      compat:
+        supportsDeveloperRole: false
+  ```
+- 现在在「设置 → 模型能力管理」页的模型列表上方，按线路给出下拉：`自动` / `强制 system` / `强制 developer`，写入同一条线路级 `compat.supportsDeveloperRole`，保存后即时生效。
+- 实现要点：
+  - 读：`remote.settings.describe()` → `namespaces[llm-pi-ai].user.providers.<id>.compat.supportsDeveloperRole`（`true` → developer，`false` → system，缺失 → 自动）。
+  - 写：`remote.settings.mutate('llm-pi-ai', ops, revision)`，op 为 `{op:'set', path:['providers',id,'compat','supportsDeveloperRole'], value:false|true}`；选「自动」用 `{op:'unset', …}`，当 `compat` 里只有这一个键时改成整块 `unset ['providers',id,'compat']`，避免在 `settings.yaml` 里留下空的 `compat: {}`。
+  - 与原有的模型能力保存**合并成同一次 mutate、同一个 `expectedRevision`**：只改角色时不再多写一份没变化的 `models` 数组；底部保存条拆成「N 个模型能力 · M 条线路角色」，撤销同时回滚两者。
+  - 按协议门控：只有 `openai-completions` / `openai-responses` / `azure-openai-responses` / `openai-codex-responses` 收这个字段；线路 `api` 是别的协议（如 `anthropic-messages`）时下拉置灰并说明原因 —— 线路级写协议不认的 compat 字段会被 `dsh-llm-pi-ai` 的 `assertOfferedCompatFields` / `resolveModelCompat` **整条拒绝**，不是静默忽略。
+  - 纯 client 端改动：host 服务、typert manifest、依赖、profile 全部未动。
+- 验证方式（不触碰真实配置）：
+  - 用真实的 `applyPathOp`（`dsh-settings/lib/index.js`）语义回放四种选择生成的 ops，确认 `set` 建中间对象、`unset` 删叶子、`models` 等其它字段完好、对没有 `compat` 的线路 `unset` 是无操作。
+  - 用桩 `React.createElement`/`useState` 直接执行组件函数，断言线路块渲染出的 `select` 数量/选中值/禁用态/提示文案，以及点「保存」后真正发出的 ops 内容与 mutate 次数（1 次、revision 透传、模型 op 与角色 op 数量符合预期）。
+  - 远端通道确认：`dsh-api-settings-controller` 的 `settings/mutate` 严格 schema 明确接受 `{op:'unset', path:string[]}` 与布尔 `value`。
+- ⚠️ 改完需**重启 `dsh web`**（插件是 link 安装、client bundle 在启动时打包，没有 HMR）。
 
 ### 0.1.10
 

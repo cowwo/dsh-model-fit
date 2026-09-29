@@ -12,6 +12,13 @@ window.__ModuleLoader__.load({
 		const MAIN_LEVELS = ["off", "high", "max"];
 		const EXTRA_LEVELS = ["minimal", "low", "medium", "xhigh"];
 		const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+		/** 收 `compat.supportsDeveloperRole` 的协议；其余协议写这个字段会被设置层整条拒绝。 */
+		const ROLE_APIS = ["openai-completions", "openai-responses", "azure-openai-responses", "openai-codex-responses"];
+		const ROLE_CHOICES = [
+			{ value: "auto", label: "自动（交给 pi-ai 推断）" },
+			{ value: "system", label: "强制 system" },
+			{ value: "developer", label: "强制 developer" }
+		];
 		const stable = (v) => JSON.stringify(v);
 		/** 剥离 schema 解析默认值，只把用户真实写下的字段带回编辑。 */
 		function cleanEntry(m) {
@@ -35,6 +42,20 @@ window.__ModuleLoader__.load({
 		}
 		function compatTag(m) {
 			return m.compat && m.compat.thinkingFormat && typeof m.compat.thinkingFormat === "string" ? m.compat.thinkingFormat : null;
+		}
+		/**
+		 * 线路级系统消息角色：读供应商原始 compat。
+		 * `auto` = 未写该字段，交给 pi-ai 按线路推断。
+		 */
+		function roleOf(profile) {
+			const c = profile && profile.compat;
+			if (c && typeof c.supportsDeveloperRole === "boolean") return c.supportsDeveloperRole ? "developer" : "system";
+			return "auto";
+		}
+		/** 该线路是否至少有一个模型走的协议收这个开关；api 未知时不拦（交给设置层校验）。 */
+		function roleSupported(apis) {
+			if (!Array.isArray(apis) || apis.length === 0) return true;
+			return apis.some((a) => ROLE_APIS.includes(a));
 		}
 		// 原生风格样式
 		const S = {
@@ -60,6 +81,8 @@ window.__ModuleLoader__.load({
 			const [catalog, setCatalog] = React.useState([]);
 			const [drafts, setDrafts] = React.useState({});
 			const [baseline, setBaseline] = React.useState({});
+			const [pcompat, setPcompat] = React.useState({}); // pid -> "auto" | "system" | "developer"
+			const [pbase, setPbase] = React.useState({});
 			const [revision, setRevision] = React.useState(undefined);
 			const [busy, setBusy] = React.useState(false);
 			const [result, setResult] = React.useState(null);
@@ -77,6 +100,8 @@ window.__ModuleLoader__.load({
 					bridge.catalog()
 				]).then(([describeRes, catalogRes]) => {
 					let list = [];
+					const pc = {};
+					const pb = {};
 					if (describeRes && describeRes.ok) {
 						const view = describeRes.value;
 						const doc = ((view && view.namespaces) || []).find((n) => n.ns === NS);
@@ -84,7 +109,22 @@ window.__ModuleLoader__.load({
 						const raw = (doc && doc.user) || {};
 						for (const [id, profile] of Object.entries((raw && raw.providers) || {})) {
 							if (!profile || !Array.isArray(profile.models)) continue;
-							list.push({ id, displayName: profile.displayName || id, models: profile.models.map(cleanEntry) });
+							const apis = new Set();
+							if (typeof profile.api === "string") apis.add(profile.api);
+							for (const m of profile.models) if (m && typeof m.api === "string") apis.add(m.api);
+							const compatKeys = profile.compat && typeof profile.compat === "object" ? Object.keys(profile.compat) : [];
+							list.push({
+								id,
+								displayName: profile.displayName || id,
+								models: profile.models.map(cleanEntry),
+								apis: [...apis],
+								// 「还原成自动」时，只有 compat 里仅剩角色这一个键才连整块一起删；
+								// 该分支只在基线确实写过角色字段（baseline !== auto）时可到达，
+								// 所以这里的快照不会因为本次会话里先 set 过而失真。
+								roleSolo: compatKeys.length <= 1
+							});
+							pc[id] = roleOf(profile);
+							pb[id] = pc[id];
 						}
 					} else {
 						const err = describeRes && describeRes.error;
@@ -99,6 +139,8 @@ window.__ModuleLoader__.load({
 					}
 					setDrafts(d);
 					setBaseline(b);
+					setPcompat(pc);
+					setPbase(pb);
 
 					const groups = catalogRes && catalogRes.ok && catalogRes.value ? catalogRes.value.groups || [] : [];
 					setCatalog(groups.map((g) => ({
@@ -178,20 +220,33 @@ window.__ModuleLoader__.load({
 			const shown = flat
 				.filter(({ m, pname }) => !q || (m.id || "").toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q) || (pname || "").toLowerCase().includes(q))
 				.filter(({ m }) => !onlySet || imgOn(m) || m.reasoningEfforts !== undefined || (m.compat && Object.keys(m.compat).length > 0));
-			// 变更统计（按供应商）
-			const changedPids = (providers || []).filter((p) => stable(drafts[p.id] || []) !== stable(baseline[p.id] || [])).map((p) => p.id);
-			let diffCount = 0;
-			for (const pid of changedPids) {
+			// 变更统计（按供应商）：模型能力与线路角色分开算
+			const modelPids = (providers || []).filter((p) => stable(drafts[p.id] || []) !== stable(baseline[p.id] || [])).map((p) => p.id);
+			const rolePids = (providers || []).filter((p) => (pcompat[p.id] || "auto") !== (pbase[p.id] || "auto")).map((p) => p.id);
+			let modelDiff = 0;
+			for (const pid of modelPids) {
 				const b = baseline[pid] || [];
 				const d = drafts[pid] || [];
-				for (let i = 0; i < Math.max(b.length, d.length); i++) if (stable(b[i]) !== stable(d[i])) diffCount++;
+				for (let i = 0; i < Math.max(b.length, d.length); i++) if (stable(b[i]) !== stable(d[i])) modelDiff++;
 			}
+			const diffCount = modelDiff + rolePids.length;
 			const doSave = () => {
 				setBusy(true);
-				const ops = changedPids.map((pid) => ({ op: "set", path: ["providers", pid, "models"], value: drafts[pid] || [] }));
+				const ops = modelPids.map((pid) => ({ op: "set", path: ["providers", pid, "models"], value: drafts[pid] || [] }));
+				for (const pid of rolePids) {
+					const choice = pcompat[pid] || "auto";
+					if (choice === "auto") {
+						const p = (providers || []).find((x) => x.id === pid);
+						ops.push(p && p.roleSolo
+							? { op: "unset", path: ["providers", pid, "compat"] }
+							: { op: "unset", path: ["providers", pid, "compat", "supportsDeveloperRole"] });
+					} else {
+						ops.push({ op: "set", path: ["providers", pid, "compat", "supportsDeveloperRole"], value: choice === "developer" });
+					}
+				}
 				bridge.mutate(ops, revision).then((resp) => {
 					if (resp && resp.ok) {
-						setResult({ ok: true, error: "已保存。模型选择器与对话请求将使用新的能力配置。" });
+						setResult({ ok: true, error: "已保存。模型能力与线路系统消息角色均已生效。" });
 						load();
 					} else {
 						const err = resp && resp.error;
@@ -271,6 +326,33 @@ window.__ModuleLoader__.load({
 				),
 				React.createElement("div", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" } }, (providers || []).length + " 个供应商 · " + flat.length + " 个模型" + (busy ? " · 加载中…" : "")),
 				result ? React.createElement("div", { style: { fontSize: 13, padding: "8px 12px", borderRadius: 8, background: result.ok ? "var(--dsw-alias-state-success-tertiary)" : "var(--dsw-alias-state-error-secondary)", color: result.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)" } }, result.ok ? result.error : ("保存失败：" + result.error)) : null,
+				// 线路级：系统消息角色（compat.supportsDeveloperRole）
+				(providers || []).length > 0
+					? React.createElement("div", { style: { ...S.card, display: "flex", flexDirection: "column", gap: 10 } },
+						React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 3 } },
+							React.createElement("div", { style: { fontWeight: 600, fontSize: 14, color: "var(--dsw-alias-label-primary)" } }, "线路系统消息角色"),
+							React.createElement("div", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" } }, "系统提示词以哪个 role 发给这条线路（compat.supportsDeveloperRole）。按线路生效，某个模型自己的 compat 若写了同名字段会覆盖线路默认值。只认 system 的上游用「强制 system」即可绕开 422。")
+						),
+						(providers || []).map((p) => {
+							const ok = roleSupported(p.apis);
+							const choice = pcompat[p.id] || "auto";
+							return React.createElement("div", { key: p.id, style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+								React.createElement("span", { style: S.badge }, p.displayName || p.id),
+								React.createElement("select", {
+									value: choice,
+									disabled: !ok,
+									onChange: (e) => setPcompat((prev) => ({ ...prev, [p.id]: e.target.value })),
+									style: { ...S.input, padding: "4px 8px", cursor: ok ? "pointer" : "not-allowed", opacity: ok ? 1 : 0.5 }
+								}, ROLE_CHOICES.map((c) => React.createElement("option", { key: c.value, value: c.value }, c.label))),
+								React.createElement("span", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)", wordBreak: "break-all" } },
+									!ok ? ("该线路协议（" + p.apis.join(" / ") + "）不支持此开关，写下去会被设置校验拒绝")
+										: choice === "auto" ? "自动：由 pi-ai 按 baseURL/协议推断（自定义线路通常推断为 developer）"
+											: choice === "system" ? "写入 supportsDeveloperRole: false"
+												: "写入 supportsDeveloperRole: true（模型不是推理模型时仍会发 system）")
+							);
+						})
+					)
+					: null,
 				// 平铺模型卡片（允许换行，不截断）
 				shown.length === 0
 					? React.createElement("p", { style: { fontSize: 13, color: "var(--dsw-alias-label-tertiary)" } }, "没有匹配的模型。")
@@ -299,9 +381,9 @@ window.__ModuleLoader__.load({
 					})),
 				// 底部保存条
 				React.createElement("div", { style: { position: "sticky", bottom: 0, background: "color-mix(in srgb, var(--dsw-alias-bg-layer-1) 96%, transparent)", backdropFilter: "blur(4px)", borderTop: "1px solid var(--dsw-alias-border-l2)", padding: "10px 0", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 } },
-					React.createElement("span", { style: { fontSize: 13, color: diffCount === 0 ? "var(--dsw-alias-label-tertiary)" : "var(--dsw-alias-state-error-primary)" } }, diffCount === 0 ? "没有未保存的修改" : ("将修改 " + diffCount + " 个模型（" + changedPids.length + " 个供应商）")),
+					React.createElement("span", { style: { fontSize: 13, color: diffCount === 0 ? "var(--dsw-alias-label-tertiary)" : "var(--dsw-alias-state-error-primary)" } }, diffCount === 0 ? "没有未保存的修改" : ("将修改 " + modelDiff + " 个模型能力 · " + rolePids.length + " 条线路角色")),
 					React.createElement("span", { style: { flex: 1 } }),
-					React.createElement("button", { type: "button", onClick: () => { setDrafts({ ...baseline }); setResult(null); }, disabled: busy || diffCount === 0, style: { ...S.ghost, opacity: busy || diffCount === 0 ? 0.45 : 1 } }, "撤销修改"),
+					React.createElement("button", { type: "button", onClick: () => { setDrafts({ ...baseline }); setPcompat({ ...pbase }); setResult(null); }, disabled: busy || diffCount === 0, style: { ...S.ghost, opacity: busy || diffCount === 0 ? 0.45 : 1 } }, "撤销修改"),
 					React.createElement("button", { type: "button", onClick: doSave, disabled: busy || diffCount === 0, style: { ...S.primary, opacity: busy || diffCount === 0 ? 0.45 : 1 } }, "保存")
 				),
 				// 继承弹窗
