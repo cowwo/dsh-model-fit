@@ -3,7 +3,7 @@
 **模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」、为每条线路设置「系统消息角色」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.2.1`
+- 当前版本：`0.2.2`
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
 - 依赖：
   - **`zod@^4`（真实 dependency，随插件自动安装）** —— `lib/typert.host.js` 直接 `import { z } from 'zod'`，而 DSH 的 typert 校验要求 schema 必须是 **zod v4**（判据是内部标记 `_zod`）。声明为 dependency 才能保证解析到 v4，详见下方 0.1.10 变更记录。
@@ -168,6 +168,31 @@ dsh plugin --profile web remove dsh-model-fit
 ---
 
 ## 变更记录
+
+### 0.2.2
+
+**修复：0.2.1 放开 peer 后插件终于能加载了，但它的 Typert 清单还是 0.1.x 旧契约 —— 一激活就把整棵插件树带崩，聊天记录都看不到。**
+
+- 现象：0.2.1 之后重启 `dsh web`，界面起来但**整个聊天记录都看不到**；把 `dsh-model-fit` 从 profile 的 `dsh.profile.bundles` 里手工摘掉才恢复。
+- 根因：`lib/typert.host.js` 里两处 strict codec 用的是 0.1.x 的裸 `schema` 字段：
+  ```js
+  codec: { mode: 'strict', typeSymbol: '…:request', schema: sourceRequestSchema }   // 旧
+  ```
+  0.2.x 的契约要求 `create` 是**工厂函数**（网关按 `codec.create().parse(value)` 调用，registry 把 `create()` 的结果缓存为 schema）：
+  ```js
+  const X$schema = () => (X$schema$value ??= z.…)                                    // 官方生成物同形
+  codec: { mode: 'strict', typeSymbol: '…', create: X$schema }                        // 新
+  ```
+  判据在 `dsh-typert-loader` 的 `requireStrictCodec`：`typeof codec.create !== "function"` → 抛 `has no create() factory`；`dsh-typert-registry` 的 `validateCodec` 同样要求 `create`。
+- **为什么是全局故障而不是只挂一个插件**：loader 的 `apply()` 里 `await Promise.all(flush(...))`，把注册失败汇成 `AggregateError` 抛出 → 这个核心 entry 挂载失败 → 整棵插件树加载失败。清单错误在这个架构里不是局部故障。
+- **为什么之前一直没暴露**：0.1.x→0.2.x 的 peer 范围把整个 bundle 挡在门外（`incompatible-version`），插件根本没机会激活 —— 那道检查**意外地掩盖**了清单的旧契约。0.2.1 放开 peer 后掩盖消失，真实不兼容立刻显形。这也是"放开 peer"必须配一次清单复验的原因。
+- 改法与验证：
+  - 两处 codec 改为 `create: () => <schema>`（惰性工厂，与官方生成物同形）。
+  - 用 loader 自己导出的校验器 `validateTypertManifest('dsh-model-fit', TYPERT)` 验证通过 —— 正是当初抛错的那道闸。
+  - 复刻 `typert-registry` 的 `validateCodec` / wire 名 / segment 名规则逐条检查通过，并确认清单里不再残留死掉的 `schema` 字段。
+  - 按真实调用路径 `codec.create().parse(value)` 实测：参数解析、结果解析、结果 `null`、非法输入被拒；`_zod` v4 标记在位（zod 4.6.5）。
+  - 顺带核对同期其它 API 面：`TypertRemoteService` 构造函数逐字未变、`ctx.llm.resolveModelInfo` 仍在、`settings.mutate` 的 `{op:'set'|'unset', path}` 契约未变、client `inject` 的 4 个名字与同 profile 正常工作插件一致、`client/client.js` 语法 OK。
+- ⚠️ 教训：**peer 范围是"声明"，不是"兼容性证明"。** 放开它只解决"被误拦"，同时撤掉那道意外保护 —— 以后每次 DSH 大版本升级，都要用官方校验器把 typert 清单重新验一遍，而不是只看"插件能不能加载"。
 
 ### 0.2.1
 
