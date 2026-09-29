@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-fit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "模型能力管理：为手写模型设置图片输入与推理强度、线路系统消息角色（可一键继承目录模型的精确能力）。",
   "type": "module",
   "main": "lib/index.js",
@@ -56,9 +56,9 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-typert-protocol": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "*",
     "@deepseek-ai/schemastery": "*",
-    "@earendil-works/pi-ai": "^0.84.3"
+    "@earendil-works/pi-ai": "*"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {

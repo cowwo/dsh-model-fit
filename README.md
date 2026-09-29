@@ -3,11 +3,11 @@
 **模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」、为每条线路设置「系统消息角色」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.2.0`
+- 当前版本：`0.2.1`
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
 - 依赖：
   - **`zod@^4`（真实 dependency，随插件自动安装）** —— `lib/typert.host.js` 直接 `import { z } from 'zod'`，而 DSH 的 typert 校验要求 schema 必须是 **zod v4**（判据是内部标记 `_zod`）。声明为 dependency 才能保证解析到 v4，详见下方 0.1.10 变更记录。
-  - `@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-typert-protocol`、`@earendil-works/pi-ai`（peer，运行时由 DSH 安装目录级联解析）
+  - `@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-typert-protocol`、`@earendil-works/pi-ai`（peer，运行时由 DSH 安装目录级联解析；范围统一为 `*`，跟随运行时、不写死上界，详见下方 0.2.1 变更记录）
 
 ---
 
@@ -168,6 +168,25 @@ dsh plugin --profile web remove dsh-model-fit
 ---
 
 ## 变更记录
+
+### 0.2.1
+
+**修复：DSH 升到 0.2.0-rc.1 后插件被整个拦在门外（插件页显示「异常」，`incompatible-version`）。**
+
+- 现象：profile 里 `dsh-model-fit` 被判不兼容 —— `dsh-model-fit@0.2.0 与 DSH 0.2.0-rc.1 不兼容（要求 @deepseek-ai/dsh-typert-protocol ^0.1.1-rc.2）`。真实后果不只是警告：整个 bundle 被跳过，它那层 patch 不加载，`modelCapability` 服务不存在，「一键继承」直接失效。
+- 根因：`peerDependencies` 里写死的 `^0.1.1-rc.2` 规范化后是 `>=0.1.1-rc.2 <0.2.0-0` —— 0.x 的 caret 只允许 patch 位浮动。而 DSH 0.2.0-rc.1 自带的 `@deepseek-ai/dsh-typert-protocol` 是 **0.2.0-rc.1**，正好落在上界之外。这个范围从首个 commit 就写死了（当时运行时是 0.1.x），随 DSH 升到 0.2 才引爆。
+- 排查要点：
+  - 判定发生在**启动时**：`dsh-app-boot` 的 `loadProfileDirectory` 对每个 bundle 跑 `evaluatePluginCompatibility`，不通过就整包跳过（记入 `skippedBundles`），不是只打一条警告。
+  - 它只看名字为 `@deepseek-ai/dsh` 或 `@deepseek-ai/dsh-*` 的 peer，用 `semver.satisfies(运行版本, range, { includePrerelease: true })` 比。
+  - **`peerDependenciesMeta.optional: true` 不救场**：那段检查完全不读 `peerDependenciesMeta`，标了 optional 照样拦。
+- 同时确认 API 其实没变（所以是过期声明，不是真不兼容）：插件对 protocol 的全部用法只有 `TypertRemoteService`（`lib/index.js` 的 import 与 `super(ctx, 'modelCapability')`）；0.2.0-rc.1 仍从包根导出它，构造函数体与 0.1.1-rc.2 逐字一致；且 profile 与插件 `node_modules` 里的 protocol 都指向运行时那一份，不存在双实例。
+- 改法：`@deepseek-ai/dsh-typert-protocol` 与 `@earendil-works/pi-ai` 的 peer 范围统一改成 `"*"`（与同作者的 `dsh-provider-info`、同 profile 的 `dsh-icon-custom`/`dsh-notify-p` 一致）。host 提供的依赖跟随运行时，不再写死上界 —— 以后升到 0.5.0 / 1.0.0 也不会再被拦。
+  - 顺带修掉一个同类隐患：`@earendil-works/pi-ai` 原写 `^0.84.3`，而运行时实际解析到 0.85.1，同样早已落在范围外（只因它不是 dsh 系 peer 才没被拦）。
+- 验证方式：
+  - 直接调用 DSH 自己的判定函数，对 `0.1.10 / 0.2.0-rc.1 / 0.2.5 / 0.5.0 / 1.0.0 / 2.0.0-rc.1 / 1.0.0-beta.3` 全部 PASS。
+  - 复现启动时的组合逻辑：profile 的 10 个 bundle 全部成层、`skippedBundles` 为空，`dsh-model-fit` 正常贡献出 `model-fit` 行。
+  - 单独 `import lib/index.js`，确认在当前运行时 protocol 下加载正常（`TypertRemoteService`、`inject = ['llm']`）。
+- ⚠️ 改完需**重启 `dsh web`**（bundle 在启动时组合，改 peer 不会热生效）。
 
 ### 0.2.0
 
