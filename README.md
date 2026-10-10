@@ -1,9 +1,9 @@
 # dsh-model-fit
 
-**模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」、为每条线路设置「系统消息角色」，并支持**一键继承**目录模型的精确能力（含线上取值与 compat），解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
+**模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」、为每条线路设置「系统消息角色」，并支持**一键继承**目录模型的**图片输入与思考等级（含线上取值）**，解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.2.2`
+- 当前版本：`0.2.3`
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
 - 依赖：
   - **`zod@^4`（真实 dependency，随插件自动安装）** —— `lib/typert.host.js` 直接 `import { z } from 'zod'`，而 DSH 的 typert 校验要求 schema 必须是 **zod v4**（判据是内部标记 `_zod`）。声明为 dependency 才能保证解析到 v4，详见下方 0.1.10 变更记录。
@@ -20,7 +20,7 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 1. **推理强度** —— 界面无法为手写模型选择推理等级，模型不显示 reasoning 能力。
 2. **图片输入** —— 较新模型（如 `glm-5.3`、`deepseek-v4-flash-vision-exp` 等）在模型选择器里不显示图片输入，导致 `model-unavailable: ... does not accept image input`。
 
-本插件直接把这些能力写入 `llm-pi-ai` 设置命名空间的模型配置（`input`、`reasoningEfforts`、`compat`），运行时由 pi-ai 适配器解析生效，因此请求时图片/推理真正可用。
+本插件直接把这些能力写入 `llm-pi-ai` 设置命名空间的模型配置（`input`、`reasoningEfforts`），运行时由 pi-ai 适配器解析生效，因此请求时图片/推理真正可用。（`compat` 只由线路级「系统消息角色」写入 `supportsDeveloperRole`；「继承自…」不写 `compat`，原因见 0.2.3 变更记录。）
 
 ---
 
@@ -43,10 +43,10 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 
 ### 4. 一键继承（核心）
 - 每个模型的「继承自…」按钮打开选择弹窗，列出**所有有模型的目录供应商**（无模型供应商自动隐藏）。
-- 选择一个来源模型后，插件通过运行时 RPC `modelCapability/source` 读取其精确能力，并整体覆盖到当前模型：
+- 选择一个来源模型后，插件通过运行时 RPC `modelCapability/source` 读取其能力，并覆盖到当前模型**仅两项**：
   - 图片输入模态（`input`）
-  - 推理等级（`reasoningEfforts`，含**线上取值**）
-  - 兼容配置（`compat`，例如 deepseek 系的 `thinkingFormat:'deepseek'`、`maxTokensField` 等 — 这正是让真实请求可用的关键）
+  - 思考等级（`reasoningEfforts`，含**线上取值**）
+- **不继承 `compat`**（0.2.3 起）：目录条目的 `compat` 里混着 DSH 只允许目录自己设置的开关（withhold，如 `supportsMidConvoSystemMessages`），抄进配置会被 `dsh-llm-pi-ai` 的设置校验**整条拒绝**（一处违规 → 整次保存作废）。目标模型已有的 `compat` 原样保留，不受继承影响。
 - 若目录无该模型精确条目（如自定义的 `deepseek-v4-flash-vision-exp`），会自动按**同族模型**（`deepseek-v4-flash`）或等级名继承，并在提示里注明。
 
 ### 5. 批量操作
@@ -90,7 +90,7 @@ DSH 的模型供应方有两类：**内置**（自带完整目录，含推理强
 主机端（lib/index.js + lib/typert.host.js）
   └─ ModelCapabilityService.source(request)
         ├─ this.ctx.llm.resolveModelInfo(provider, model)   → inputModalities + 推理等级 ids
-        └─ @earendil-works/pi-ai/providers/all 目录          → thinkingLevelMap(线上取值) + compat
+        └─ @earendil-works/pi-ai/providers/all 目录          → thinkingLevelMap(线上取值) + compat(仅诊断)
 ```
 
 - 主机暴露一个 typert 主机端点 `modelCapability/source`（严格 manifest，`lib/typert.host.js`），浏览器端通过网关调用。
@@ -151,7 +151,7 @@ dsh plugin --profile web remove dsh-model-fit
 1. 打开 **设置 → 模型能力管理**。
 2. 在列表里找到目标模型（供应商徽章标识归属，如 `ocgo-01`）。
 3. 需要图片 → 勾选「图片」；需要推理 → 点选对应等级（可改线上值）。
-4. 或点「继承自…」，选一个目录中的同模型，一键带出全部能力。
+4. 或点「继承自…」，选一个目录中的同模型，一键带出**图片输入 + 思考等级**（不含 `compat`）。
 5. 底部点「保存」。绿色横幅即成功。
 6. 回到「模型」页/模型选择器确认该模型已显示图片与推理强度。
 
@@ -161,13 +161,29 @@ dsh plugin --profile web remove dsh-model-fit
 
 - 继承时若目录没有该模型的**精确**条目（如自造的 `*-vision-exp`），会按同族/等级名继承并提示 —— 这是目录数据缺失所致，非插件 bug。
 - 无模型的目录供应商在“继承”弹窗中不显示（无来源可继承）。
-- 对个别需要特定 `compat` 才能跑通的第三方网关，若默认继承后仍请求异常，可在等级 pill 的小输入框手动调整线上值。
+- **继承不写 `compat`**（0.2.3 起，见变更记录）：若来源上游需要特定兼容开关（如 DeepSeek 系的 `thinkingFormat: 'deepseek'`、`maxTokensField: 'max_tokens'`）才能跑通，请在配置里手写 —— 只有 DSH 允许写的字段（`offer`）能写，目录专有字段（`withhold`）写了会被设置层整条拒绝。另一个办法是直接在等级 pill 的小输入框调整线上取值。
 - 「自动」**不显示 pi-ai 实际推断出的角色**：推断逻辑（`detectCompat`）在 pi-ai 内部且未导出，浏览器端算不出来。经验上自定义线路（baseURL 不含任何已知厂商特征）会被推断为 `developer`，所以想稳妥就显式选「强制 system」。
-- 「继承自…」会**整体覆盖**模型的 `compat`；若来源目录条目的 compat 里带 `supportsDeveloperRole`，它会盖过线路级角色设置。遇到这种情况按线路重设一次，或直接改用线路级开关（模型只要不写该字段就跟随线路）。
 
 ---
 
 ## 变更记录
+
+### 0.2.3
+
+**修复：「继承自…」把目录条目的 `compat` 整体抄进配置，命中 DSH 的目录专有开关 → 设置层整条拒绝，保存全废（连其它线路的改动一起）。现在继承只写「图片输入 + 思考等级」。**
+
+- 现象：从目录条目继承后点「保存」，红条报
+  ```
+  保存失败: llm-pi-ai: provider "cmd-01" model "moonshotai/Kimi-K3" sets compat
+  "supportsMidConvoSystemMessages", which is not configurable here: pi-ai's installed
+  catalog sets it for the vendors that need it, so name that provider as the route instead
+  ```
+- 根因：`client.js` 的 `inheritTo` 原样 `patch.compat = { ...s.compat }`。pi-ai 目录的 `compat` 里混着 DSH 的 **withhold**（目录专有、不许写进配置）字段；`dsh-llm-pi-ai` 的 `assertOfferedCompatFields`（`lib/index.js:522`）命中即抛 `PiAiCatalogError`，而写入闸 `ctx.on("internal/config") → assertServiceable`（`:2556`）跑的是**整份配置**，所以一处违规 = 整次保存作废（原子写，什么都不落盘）。
+- 命中面（实测内置目录）：1495 个模型里 **628 个（42%）** 的 compat 至少含一个「写不进去」的字段；`moonshotai.kimi-k3` 会带进 2 个 —— `supportsMidConvoSystemMessages`、`supportsMidConvoToolAdditions`。
+- 改法：继承只写 `input` + `reasoningEfforts`；`compat` 一律不继承，**目标模型原有 compat 原样保留**。主机端 `modelCapability/source` 仍返回 `compat`（仅诊断），**代码路径与 typert 清单未改** → 不需要重启 `dsh web`，刷新页面即生效。
+- 验证（两段都是真实调用，不是推理）：
+  1. **客户端**：`verify-inherit-nocompat.mjs`（工作区，非本包）用最小 React 桩驱动**真实 client.js** 走完「点继承 → 选 `moonshotai.kimi-k3` → 点保存」，抓真正会发出的 ops。0.2.2 的 client.js 抓到 Kimi 条目带 `compat` 且含 2 个被拒字段（FAIL）；0.2.3 抓到 `input: ['text','image']`、`reasoningEfforts: {off,low,high,max}`、**无 compat**（PASS），deepseek 条目手写的 compat 一字未动。
+  2. **服务端**：直接对运行中的 DSH 打真实 HTTP RPC `settings/mutate`。用旧载荷 → 返回**与截图逐字相同**的拒绝；用新载荷 → `ok`，落盘 `input` + `reasoningEfforts`，`compat` 未写入。
 
 ### 0.2.2
 

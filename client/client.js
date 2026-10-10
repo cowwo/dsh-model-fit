@@ -183,6 +183,16 @@ window.__ModuleLoader__.load({
 				if (!m) return;
 				upd(pid, index, { input: imgOn(m) ? ["text"] : ["text", "image"] });
 			};
+			/**
+			 * 继承来源模型的「图片输入」与「思考等级」两项，**不继承 compat**。
+			 *
+			 * 为什么不抄 compat：目录条目的 compat 里混着 DSH 只允许目录自己设置的
+			 * 开关（withhold，如 supportsMidConvoSystemMessages），抄进配置会被
+			 * dsh-llm-pi-ai 的设置校验整条拒绝 —— 一处违规，整次保存（含其它线路的
+			 * 改动）全部作废，且报错只指向一个模型、看不出是「继承」带来的。
+			 * 需要 thinkingFormat / maxTokensField 这类开关时，在配置里手写 DSH 允许
+			 * 写的那部分即可；目标模型已有的 compat 由本函数原样保留。
+			 */
 			const inheritTo = (pid, index, srcProvider, srcModel) => {
 				bridge.source({ provider: srcProvider, model: srcModel })
 					.then((resp) => {
@@ -207,9 +217,15 @@ window.__ModuleLoader__.load({
 						} else {
 							patch.reasoningEfforts = false;
 						}
-						if (s.compat && typeof s.compat === "object" && Object.keys(s.compat).length > 0) patch.compat = { ...s.compat };
 						upd(pid, index, patch);
-						setResult({ ok: true, error: "已从 " + srcProvider + "." + srcModel + " 继承能力" + (s.exact ? "" : "（目录无精确条目，已按同族/等级名继承）") + "。点击「保存」写入。" });
+						setResult({
+							ok: true,
+							error: "已从 " + srcProvider + "." + srcModel + " 继承："
+								+ (patch.input.includes("image") ? "图片输入" : "纯文本")
+								+ " + 思考等级（" + (levels.length > 0 ? levels.join("/") : "来源不是推理模型") + "）"
+								+ (s.exact ? "" : "（目录无精确条目，已按同族/等级名继承）")
+								+ "。兼容开关（compat）不在继承范围内，该模型原有 compat 保持不变。点击「保存」写入。"
+						});
 					})
 					.catch((e) => { setPicker(null); setResult({ ok: false, error: String(e && e.message || e) }); });
 			};
@@ -312,7 +328,7 @@ window.__ModuleLoader__.load({
 				// 标题区
 				React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
 					React.createElement("h2", { style: { margin: 0, fontSize: 17, fontWeight: 600, color: "var(--dsw-alias-label-primary)" } }, "模型能力管理"),
-					React.createElement("div", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" } }, "为自定义模型设置图片输入与推理强度，可一键继承目录模型的精确能力")
+					React.createElement("div", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" } }, "为自定义模型设置图片输入与思考等级，可一键继承目录模型的这两项能力（不继承兼容开关 compat）")
 				),
 				// 工具条卡片
 				React.createElement("div", { style: { ...S.card, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
