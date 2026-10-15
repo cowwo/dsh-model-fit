@@ -1,9 +1,20 @@
 # dsh-model-fit
 
+> ## ⚠️ 此插件已合并，不再单独维护
+>
+> 本插件已与 [`dsh-provider-info`](https://github.com/cowwo/dsh-provider-info) 合并为新插件
+> **[`dsh-model-toolkit`](https://github.com/cowwo/dsh-model-toolkit)**（模型工具箱）——
+> 一个包同时提供「模型能力管理」与「提供商徽章 / 余额查询」两块功能。
+>
+> **请改用：** `npm i dsh-model-toolkit`（或 `npm i @cowwo/dsh-model-toolkit`）
+>
+> 本仓库已归档、`dsh-model-fit` 包已标记为废弃（deprecated）；历史版本仍可查看与安装。
+
+
 **模型能力管理** —— 为 DSH 的自定义（手动添加）模型设置「图片输入」与「推理强度」、为每条线路设置「系统消息角色」，并支持**一键继承**目录模型的**图片输入与思考等级（含线上取值）**，解决手动添加模型时无法配置推理强度、以及最新模型不显示图片输入的问题。
 
 - 包名 / 行 ID：`dsh-model-fit` / `model-fit`
-- 当前版本：`0.2.3`
+- 当前版本：`0.2.4`（终版）
 - 类型：DSH Web Profile Bundle（正式插件，非动态调试插件）
 - 依赖：
   - **`zod@^4`（真实 dependency，随插件自动安装）** —— `lib/typert.host.js` 直接 `import { z } from 'zod'`，而 DSH 的 typert 校验要求 schema 必须是 **zod v4**（判据是内部标记 `_zod`）。声明为 dependency 才能保证解析到 v4，详见下方 0.1.10 变更记录。
